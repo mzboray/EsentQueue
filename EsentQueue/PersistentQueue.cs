@@ -104,9 +104,12 @@ namespace EsentQueue
             var cursor = _cursorCache.GetCursor();
             try
             {
-                while (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
+                using (var transaction = cursor.BeginTransaction())
                 {
-                    try
+                    Api.JetSetCurrentIndex(cursor.Session, cursor.DataTable, null);
+                    Api.MakeKey(cursor.Session, cursor.DataTable, 0L, MakeKeyGrbit.NewKey);
+
+                    if (Api.TrySeek(cursor.Session, cursor.DataTable, SeekGrbit.SeekGE))
                     {
                         int attempts = 1 + (Api.RetrieveColumnAsInt32(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn) ?? 0);
                         using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
@@ -115,19 +118,11 @@ namespace EsentQueue
                             item = new QueueItem<T>(obj, attempts);
                         }
 
-                        using (var transaction = cursor.BeginTransaction())
-                        {
-                            Api.JetDelete(cursor.Session, cursor.DataTable);
-                            transaction.Commit(CommitTransactionGrbit.LazyFlush);
-                        }
-                    }
-                    catch (EsentException e) when
-                        (e is EsentWriteConflictException || e is EsentRecordDeletedException)
-                    {
-                        continue;
-                    }
+                        Api.JetDelete(cursor.Session, cursor.DataTable);
+                        transaction.Commit(CommitTransactionGrbit.LazyFlush);
 
-                    return true;
+                        return true;
+                    }
                 }
 
                 item = default(QueueItem<T>);
@@ -155,9 +150,9 @@ namespace EsentQueue
             var cursor = _cursorCache.GetCursor();
             try
             {
-                while (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
+                using (var transaction = cursor.BeginTransaction())
                 {
-                    try
+                    if (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
                     {
                         int attempts = 1 + Api.EscrowUpdate(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn, 1);
                         using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
@@ -165,13 +160,8 @@ namespace EsentQueue
                             T obj = _serializer.Unpack(colStream);
                             item = new QueueItem<T>(obj, attempts);
                         }
-                        
+
                         return true;
-                    }
-                    catch (EsentException e) when
-                        (e is EsentWriteConflictException || e is EsentRecordDeletedException)
-                    {
-                        continue;
                     }
                 }
 
