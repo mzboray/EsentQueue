@@ -40,7 +40,7 @@ namespace QueueDemo
 
                 s.Restart();
                 long count = 0;
-                QueueItem<Event> item;
+                Event item;
                 var workerTasks = new Task[workers];
                 for (int i = 0; i < workers; i++)
                 {
@@ -85,7 +85,7 @@ namespace QueueDemo
 
                 s.Restart();
                 long count = 0, peekCount = 0;
-                QueueItem<Event> item;
+                Event item;
                 int total = dequeuers + peekers;
                 var workerTasks = new Task[total];
                 for (int i = 0; i < workerTasks.Length; i++)
@@ -152,7 +152,7 @@ namespace QueueDemo
                 Console.WriteLine($"Count: {queue.Count}");
 
                 s.Restart();
-                QueueItem<Event> item;
+                Event item;
                 while (queue.TryDequeue(out item))
                 {
                     // intentionally blank

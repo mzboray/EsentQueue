@@ -48,12 +48,10 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="TestQueue.cs" />
     <Compile Include="PersistentQueue.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="QueueCursor.cs" />
     <Compile Include="QueueCursorCache.cs" />
-    <Compile Include="QueueItem.cs" />
     <Compile Include="StartOption.cs" />
   </ItemGroup>
   <ItemGroup>

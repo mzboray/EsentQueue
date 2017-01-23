@@ -88,9 +88,9 @@ namespace EsentQueue
             }
         }
 
-        public QueueItem<T> Dequeue()
+        public T Dequeue()
         {
-            QueueItem<T> item;
+            T item;
             if (!TryDequeue(out item))
             {
                 throw new InvalidOperationException("No items in the queue.");
@@ -99,19 +99,19 @@ namespace EsentQueue
             return item;
         }
 
-        public bool TryDequeue(out QueueItem<T> item)
+        public bool TryDequeue(out T item)
         {
             var cursor = _cursorCache.GetCursor();
             try
             {
-                using (var transaction = cursor.BeginTransaction())
+                using (var tx = cursor.BeginTransaction())
                 {
                     Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
                     while (true)
                     {
                         if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
                         {
-                            item = default(QueueItem<T>);
+                            item = default(T);
                             return false;
                         }
 
@@ -121,15 +121,13 @@ namespace EsentQueue
                         }
                     }
 
-                    int attempts = 1 + (Api.RetrieveColumnAsInt32(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn) ?? 0);
                     using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
                     {
-                        T obj = _serializer.Unpack(colStream);
-                        item = new QueueItem<T>(obj, attempts);
+                        item = _serializer.Unpack(colStream);
                     }
 
                     Api.JetDelete(cursor.Session, cursor.DataTable);
-                    transaction.Commit(CommitTransactionGrbit.LazyFlush);
+                    tx.Commit(CommitTransactionGrbit.LazyFlush);
                     return true;
                 }
             }
@@ -139,9 +137,9 @@ namespace EsentQueue
             }
         }
 
-        public QueueItem<T> Peek()
+        public T Peek()
         {
-            QueueItem<T> item;
+            T item;
             if (!TryPeek(out item))
             {
                 throw new InvalidOperationException("No items in the queue.");
@@ -150,28 +148,36 @@ namespace EsentQueue
             return item;
         }
 
-        public bool TryPeek(out QueueItem<T> item)
+        public bool TryPeek(out T item)
         {
             var cursor = _cursorCache.GetCursor();
             try
             {
-                using (var transaction = cursor.BeginTransaction())
+
+                using (var tx = cursor.BeginTransaction())
                 {
-                    if (!Api.TryMoveFirst(cursor.Session, cursor.DataTable))
+                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
+                    while (true)
                     {
-                        item = default(QueueItem<T>);
-                        return false;
+                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
+                        {
+                            item = default(T);
+                            return false;
+                        }
+
+                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Read))
+                        {
+                            break;
+                        }
                     }
 
-                    int attempts = 1 + Api.EscrowUpdate(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn, 1);
                     using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
                     {
-                        T obj = _serializer.Unpack(colStream);
-                        item = new QueueItem<T>(obj, attempts);
+                        item = _serializer.Unpack(colStream);
                     }
-                }
 
-                return true;
+                    return true;
+                }
             }
             finally
             {
@@ -217,15 +223,6 @@ namespace EsentQueue
                     };
 
                     Api.JetAddColumn(session, tableid, "Id", colDef, null, 0, out colid);
-
-                    colDef = new JET_COLUMNDEF()
-                    {
-                        coltyp = JET_coltyp.Long,
-                        grbit = ColumndefGrbit.ColumnNotNULL | ColumndefGrbit.ColumnEscrowUpdate
-                    };
-
-                    byte[] defaultValue = BitConverter.GetBytes(0);
-                    Api.JetAddColumn(session, tableid, "AttemptCount", colDef, defaultValue, defaultValue.Length, out colid);
 
                     colDef = new JET_COLUMNDEF()
                     {
