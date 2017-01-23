@@ -20,6 +20,7 @@ namespace QueueDemo
             int workers = Environment.ProcessorCount;
             Console.WriteLine($"Using {workers} workers...");
             MultiThreadReadTest(ItemCount, workers);
+            MultiThreadDequeueAndPeekTest(ItemCount, workers, workers);
         }
 
         private static void MultiThreadReadTest(int itemCount, int workers)
@@ -59,6 +60,74 @@ namespace QueueDemo
                             throw;
                         }
                     });
+                }
+                Task.WaitAll(workerTasks);
+                s.Stop();
+                Console.WriteLine($"Removed {itemCount} in {s.Elapsed}");
+                Console.WriteLine($"Count: {queue.Count}");
+            }
+        }
+
+        private static void MultiThreadDequeueAndPeekTest(int itemCount, int peekers, int dequeuers)
+        {
+            using (var queue = new PersistentQueue<Event>("test", StartOption.CreateNew))
+            {
+                var s = new Stopwatch();
+                s.Start();
+                for (int i = 0; i < itemCount; i++)
+                {
+                    var evt = CreateEvent();
+                    queue.Enqueue(evt);
+                }
+                s.Stop();
+                Console.WriteLine($"Added {itemCount} in {s.Elapsed}");
+                Console.WriteLine($"Count: {queue.Count}");
+
+                s.Restart();
+                long count = 0, peekCount = 0;
+                QueueItem<Event> item;
+                int total = dequeuers + peekers;
+                var workerTasks = new Task[total];
+                for (int i = 0; i < workerTasks.Length; i++)
+                {
+                    if (i % 2 == 0)
+                    {
+                        workerTasks[i] = Task.Run(() =>
+                        {
+                            try
+                            {
+                                while (queue.TryPeek(out item))
+                                {
+                                    Interlocked.Increment(ref peekCount);
+                                }
+                            }
+                            catch (Exception)
+                            {
+                                long c = Interlocked.Read(ref peekCount);
+                                Console.WriteLine($"Failed at {c}");
+                                throw;
+                            }
+                        });
+                    }
+                    else
+                    {
+                        workerTasks[i] = Task.Run(() =>
+                        {
+                            try
+                            {
+                                while (queue.TryDequeue(out item))
+                                {
+                                    Interlocked.Increment(ref count);
+                                }
+                            }
+                            catch (Exception)
+                            {
+                                long c = Interlocked.Read(ref count);
+                                Console.WriteLine($"Failed at {c}");
+                                throw;
+                            }
+                        });
+                    }
                 }
                 Task.WaitAll(workerTasks);
                 s.Stop();

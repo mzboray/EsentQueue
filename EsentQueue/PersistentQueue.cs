@@ -106,27 +106,32 @@ namespace EsentQueue
             {
                 using (var transaction = cursor.BeginTransaction())
                 {
-                    Api.JetSetCurrentIndex(cursor.Session, cursor.DataTable, null);
-                    Api.MakeKey(cursor.Session, cursor.DataTable, 0L, MakeKeyGrbit.NewKey);
-
-                    if (Api.TrySeek(cursor.Session, cursor.DataTable, SeekGrbit.SeekGE))
+                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
+                    while (true)
                     {
-                        int attempts = 1 + (Api.RetrieveColumnAsInt32(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn) ?? 0);
-                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
                         {
-                            T obj = _serializer.Unpack(colStream);
-                            item = new QueueItem<T>(obj, attempts);
+                            item = default(QueueItem<T>);
+                            return false;
                         }
 
-                        Api.JetDelete(cursor.Session, cursor.DataTable);
-                        transaction.Commit(CommitTransactionGrbit.LazyFlush);
-
-                        return true;
+                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Write))
+                        {
+                            break;
+                        }
                     }
-                }
 
-                item = default(QueueItem<T>);
-                return false;
+                    int attempts = 1 + (Api.RetrieveColumnAsInt32(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn) ?? 0);
+                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                    {
+                        T obj = _serializer.Unpack(colStream);
+                        item = new QueueItem<T>(obj, attempts);
+                    }
+
+                    Api.JetDelete(cursor.Session, cursor.DataTable);
+                    transaction.Commit(CommitTransactionGrbit.LazyFlush);
+                    return true;
+                }
             }
             finally
             {
@@ -152,21 +157,21 @@ namespace EsentQueue
             {
                 using (var transaction = cursor.BeginTransaction())
                 {
-                    if (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
+                    if (!Api.TryMoveFirst(cursor.Session, cursor.DataTable))
                     {
-                        int attempts = 1 + Api.EscrowUpdate(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn, 1);
-                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
-                        {
-                            T obj = _serializer.Unpack(colStream);
-                            item = new QueueItem<T>(obj, attempts);
-                        }
+                        item = default(QueueItem<T>);
+                        return false;
+                    }
 
-                        return true;
+                    int attempts = 1 + Api.EscrowUpdate(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn, 1);
+                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                    {
+                        T obj = _serializer.Unpack(colStream);
+                        item = new QueueItem<T>(obj, attempts);
                     }
                 }
 
-                item = default(QueueItem<T>);
-                return false;
+                return true;
             }
             finally
             {
@@ -182,7 +187,11 @@ namespace EsentQueue
 
         private void CheckDatabase(StartOption startOption)
         {
-            // For now assume everything is correct
+            // For now assume everything is correct. just attach the db.
+            using (var session = new Session(_instance))
+            {
+                Api.JetAttachDatabase(session, _databaseName, AttachDatabaseGrbit.None);
+            }
         }
 
         private void CreateDatabase()
@@ -231,7 +240,6 @@ namespace EsentQueue
                     transaction.Commit(CommitTransactionGrbit.None);
                 }
             }
-
         }
     }
 }

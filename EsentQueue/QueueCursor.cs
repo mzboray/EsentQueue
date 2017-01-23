@@ -21,7 +21,6 @@ namespace EsentQueue
             _instance = instance;
             _databaseName = databaseName;
             _session = new Session(instance);
-            Api.JetAttachDatabase(_session, _databaseName, AttachDatabaseGrbit.None);
             Api.JetOpenDatabase(_session, _databaseName, null, out _dbId, OpenDatabaseGrbit.None);
             _dataTable = new Table(_session, _dbId, "Data", OpenTableGrbit.None);
             _messageIdCol = Api.GetTableColumnid(_session, _dataTable, "Id");
