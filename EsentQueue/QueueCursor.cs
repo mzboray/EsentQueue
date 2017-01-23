@@ -14,18 +14,16 @@ namespace EsentQueue
         private Session _session;
         private JET_DBID _dbId;
         private Table _dataTable;
-        private JET_COLUMNID _serializedObjectCol, _messageIdCol, _attemptsCol;
+        private JET_COLUMNID _serializedObjectCol, _messageIdCol;
 
         public QueueCursor(Instance instance, string databaseName)
         {
             _instance = instance;
             _databaseName = databaseName;
             _session = new Session(instance);
-            Api.JetAttachDatabase(_session, _databaseName, AttachDatabaseGrbit.None);
             Api.JetOpenDatabase(_session, _databaseName, null, out _dbId, OpenDatabaseGrbit.None);
             _dataTable = new Table(_session, _dbId, "Data", OpenTableGrbit.None);
             _messageIdCol = Api.GetTableColumnid(_session, _dataTable, "Id");
-            _attemptsCol = Api.GetTableColumnid(_session, _dataTable, "AttemptCount");
             _serializedObjectCol = Api.GetTableColumnid(_session, _dataTable, "SerializedObject");
         }
 
@@ -34,8 +32,6 @@ namespace EsentQueue
         public Table DataTable => _dataTable;
 
         public JET_COLUMNID MessageIdColumn => _messageIdCol;
-
-        public JET_COLUMNID AttemptCountColumn => _attemptsCol;
 
         public JET_COLUMNID SerializedObjectColumn => _serializedObjectCol;
 

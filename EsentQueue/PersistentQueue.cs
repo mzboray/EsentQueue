@@ -88,9 +88,9 @@ namespace EsentQueue
             }
         }
 
-        public QueueItem<T> Dequeue()
+        public T Dequeue()
         {
-            QueueItem<T> item;
+            T item;
             if (!TryDequeue(out item))
             {
                 throw new InvalidOperationException("No items in the queue.");
@@ -99,39 +99,37 @@ namespace EsentQueue
             return item;
         }
 
-        public bool TryDequeue(out QueueItem<T> item)
+        public bool TryDequeue(out T item)
         {
             var cursor = _cursorCache.GetCursor();
             try
             {
-                while (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
+                using (var tx = cursor.BeginTransaction())
                 {
-                    try
+                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
+                    while (true)
                     {
-                        int attempts = 1 + (Api.RetrieveColumnAsInt32(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn) ?? 0);
-                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
                         {
-                            T obj = _serializer.Unpack(colStream);
-                            item = new QueueItem<T>(obj, attempts);
+                            item = default(T);
+                            return false;
                         }
 
-                        using (var transaction = cursor.BeginTransaction())
+                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Write))
                         {
-                            Api.JetDelete(cursor.Session, cursor.DataTable);
-                            transaction.Commit(CommitTransactionGrbit.LazyFlush);
+                            break;
                         }
                     }
-                    catch (EsentException e) when
-                        (e is EsentWriteConflictException || e is EsentRecordDeletedException)
+
+                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
                     {
-                        continue;
+                        item = _serializer.Unpack(colStream);
                     }
 
+                    Api.JetDelete(cursor.Session, cursor.DataTable);
+                    tx.Commit(CommitTransactionGrbit.LazyFlush);
                     return true;
                 }
-
-                item = default(QueueItem<T>);
-                return false;
             }
             finally
             {
@@ -139,9 +137,9 @@ namespace EsentQueue
             }
         }
 
-        public QueueItem<T> Peek()
+        public T Peek()
         {
-            QueueItem<T> item;
+            T item;
             if (!TryPeek(out item))
             {
                 throw new InvalidOperationException("No items in the queue.");
@@ -150,33 +148,36 @@ namespace EsentQueue
             return item;
         }
 
-        public bool TryPeek(out QueueItem<T> item)
+        public bool TryPeek(out T item)
         {
             var cursor = _cursorCache.GetCursor();
             try
             {
-                while (Api.TryMoveFirst(cursor.Session, cursor.DataTable))
-                {
-                    try
-                    {
-                        int attempts = 1 + Api.EscrowUpdate(cursor.Session, cursor.DataTable, cursor.AttemptCountColumn, 1);
-                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
-                        {
-                            T obj = _serializer.Unpack(colStream);
-                            item = new QueueItem<T>(obj, attempts);
-                        }
-                        
-                        return true;
-                    }
-                    catch (EsentException e) when
-                        (e is EsentWriteConflictException || e is EsentRecordDeletedException)
-                    {
-                        continue;
-                    }
-                }
 
-                item = default(QueueItem<T>);
-                return false;
+                using (var tx = cursor.BeginTransaction())
+                {
+                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
+                    while (true)
+                    {
+                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
+                        {
+                            item = default(T);
+                            return false;
+                        }
+
+                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Read))
+                        {
+                            break;
+                        }
+                    }
+
+                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                    {
+                        item = _serializer.Unpack(colStream);
+                    }
+
+                    return true;
+                }
             }
             finally
             {
@@ -192,7 +193,11 @@ namespace EsentQueue
 
         private void CheckDatabase(StartOption startOption)
         {
-            // For now assume everything is correct
+            // For now assume everything is correct. just attach the db.
+            using (var session = new Session(_instance))
+            {
+                Api.JetAttachDatabase(session, _databaseName, AttachDatabaseGrbit.None);
+            }
         }
 
         private void CreateDatabase()
@@ -221,15 +226,6 @@ namespace EsentQueue
 
                     colDef = new JET_COLUMNDEF()
                     {
-                        coltyp = JET_coltyp.Long,
-                        grbit = ColumndefGrbit.ColumnNotNULL | ColumndefGrbit.ColumnEscrowUpdate
-                    };
-
-                    byte[] defaultValue = BitConverter.GetBytes(0);
-                    Api.JetAddColumn(session, tableid, "AttemptCount", colDef, defaultValue, defaultValue.Length, out colid);
-
-                    colDef = new JET_COLUMNDEF()
-                    {
                         coltyp = JET_coltyp.LongBinary,
                     };
                     Api.JetAddColumn(session, tableid, "SerializedObject", colDef, null, 0, out colid);
@@ -241,7 +237,6 @@ namespace EsentQueue
                     transaction.Commit(CommitTransactionGrbit.None);
                 }
             }
-
         }
     }
 }
