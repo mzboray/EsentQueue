@@ -22,6 +22,12 @@ namespace EsentQueue
         public PersistentQueue(string path, StartOption startOption)
         {
             _instance = new Instance("EsentQueue.PersistentQueue");
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath) + "\\";
+            _instance.Parameters.LogFileDirectory = directory;
+            _instance.Parameters.SystemDirectory = directory;
+            _instance.Parameters.TempDirectory = directory;
+            _instance.Parameters.AlternateDatabaseRecoveryDirectory = directory;
             _instance.Parameters.CreatePathIfNotExist = true;
             _instance.Parameters.CircularLog = true;
             _instance.Parameters.MaxVerPages = 256;

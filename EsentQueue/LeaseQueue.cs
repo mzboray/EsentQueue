@@ -18,15 +18,26 @@ namespace EsentQueue
     /// <typeparam name="T"></typeparam>
     internal class LeaseQueue<T> : IDisposable
     {
+        private const string TableName = "Data";
+
         private static readonly MessagePackSerializer<T> _serializer = MessagePackSerializer.Get<T>();
+
 
         private Instance _instance;
         private string _databaseName;
 
         public LeaseQueue(string path)
         {
-            _instance = new Instance("queue");
+            _instance = new Instance("EsenetQueue.LeaseQueue");
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath) + "\\";
+            _instance.Parameters.LogFileDirectory = directory;
+            _instance.Parameters.SystemDirectory = directory;
+            _instance.Parameters.TempDirectory = directory;
+            _instance.Parameters.AlternateDatabaseRecoveryDirectory = directory;
+            _instance.Parameters.CreatePathIfNotExist = true;
             _instance.Parameters.CircularLog = true;
+            _instance.Parameters.MaxVerPages = 256;
             _instance.Init();
             _databaseName = path;
 
@@ -46,7 +57,7 @@ namespace EsentQueue
                 {
                     JET_DBID dbId;
                     Api.OpenDatabase(session, _databaseName, out dbId, OpenDatabaseGrbit.None);
-                    using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
+                    using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                     {
                         int count = 0;
                         Api.MoveBeforeFirst(session, table);
@@ -67,7 +78,7 @@ namespace EsentQueue
             {
                 JET_DBID dbId;
                 Api.OpenDatabase(session, _databaseName, out dbId, OpenDatabaseGrbit.None);
-                using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
+                using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                 {
                     using (var transaction = new Transaction(session))
                     {
@@ -96,7 +107,7 @@ namespace EsentQueue
                 Api.OpenDatabase(session, _databaseName, out dbId, OpenDatabaseGrbit.None);
                 using (var transaction = new Transaction(session))
                 {
-                    using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
+                    using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                     {
                         Api.JetSetCurrentIndex(session, table, "leasetimeout_index");
                         Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey);
@@ -143,7 +154,7 @@ namespace EsentQueue
 
                 using (var transaction = new Transaction(session))
                 {
-                    using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
+                    using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                     {
                         Api.JetSetCurrentIndex(session, table, "leasetimeout_index");
                         Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey);
@@ -186,54 +197,6 @@ namespace EsentQueue
             }
         }
 
-        public bool TryDequeue(out T item)
-        {
-            using (var session = new Session(_instance))
-            {
-                JET_DBID dbId;
-                Api.OpenDatabase(session, _databaseName, out dbId, OpenDatabaseGrbit.None);
-
-                using (var transaction = new Transaction(session))
-                {
-                    using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
-                    {
-                        Api.JetSetCurrentIndex(session, table, "leasetimeout_index");
-                        Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey);
-                        if (!Api.TrySeek(session, table, SeekGrbit.SeekGE))
-                        {
-                            item = default(T);
-                            return false;
-                        }
-
-                        while (true)
-                        {
-                            if (Api.TryGetLock(session, table, GetLockGrbit.Write))
-                            {
-                                break;
-                            }
-
-                            if (!Api.TryMoveNext(session, table))
-                            {
-                                item = default(T);
-                                return false;
-                            }
-                        }
-
-                        var objectCol = Api.GetTableColumnid(session, table, "SerializedObject");
-                        using (var colStream = new ColumnStream(session, table, objectCol))
-                        {
-                            T obj = _serializer.Unpack(colStream);
-                            item = obj;
-                        }
-
-                        Api.JetDelete(session, table);
-                        transaction.Commit(CommitTransactionGrbit.LazyFlush);
-                        return true;
-                    }
-                }
-            }
-        }
-
         internal void RemoveAtBookmark(byte[] bookmark)
         {
             using (var session = new Session(_instance))
@@ -243,7 +206,7 @@ namespace EsentQueue
 
                 using (var transaction = new Transaction(session))
                 {
-                    using (var table = new Table(session, dbId, "Data", OpenTableGrbit.None))
+                    using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                     {
                         if (Api.TryGotoBookmark(session, table, bookmark, bookmark.Length))
                         {
@@ -269,7 +232,7 @@ namespace EsentQueue
 
                 using (var transaction = new Transaction(session))
                 {
-                    Api.JetCreateTable(session, dbid, "Data", 16, 100, out tableid);
+                    Api.JetCreateTable(session, dbid, TableName, 16, 100, out tableid);
 
                     colDef = new JET_COLUMNDEF()
                     {
