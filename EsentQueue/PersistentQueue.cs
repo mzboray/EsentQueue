@@ -73,19 +73,22 @@ namespace EsentQueue
             var cursor = _cursorCache.GetCursor();
             try
             {
-                using (var transaction = cursor.BeginTransaction())
+                lock (_instance)
                 {
-                    using (var update = cursor.CreateDataTableUpdate())
+                    using (var transaction = cursor.BeginTransaction())
                     {
-                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                        using (var update = cursor.CreateDataTableUpdate())
                         {
-                            _serializer.Pack(colStream, item);
+                            using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
+                            {
+                                _serializer.Pack(colStream, item);
+                            }
+
+                            update.Save();
                         }
 
-                        update.Save();
+                        transaction.Commit(CommitTransactionGrbit.LazyFlush);
                     }
-
-                    transaction.Commit(CommitTransactionGrbit.LazyFlush);
                 }
             }
             finally
@@ -110,31 +113,25 @@ namespace EsentQueue
             var cursor = _cursorCache.GetCursor();
             try
             {
-                using (var tx = cursor.BeginTransaction())
+                lock (_instance)
                 {
-                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
-                    while (true)
+                    using (var tx = cursor.BeginTransaction())
                     {
-                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
+                        if (!Api.TryMoveFirst(cursor.Session, cursor.DataTable))
                         {
                             item = default(T);
                             return false;
                         }
 
-                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Write))
+                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
                         {
-                            break;
+                            item = _serializer.Unpack(colStream);
                         }
-                    }
 
-                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
-                    {
-                        item = _serializer.Unpack(colStream);
+                        Api.JetDelete(cursor.Session, cursor.DataTable);
+                        tx.Commit(CommitTransactionGrbit.LazyFlush);
+                        return true;
                     }
-
-                    Api.JetDelete(cursor.Session, cursor.DataTable);
-                    tx.Commit(CommitTransactionGrbit.LazyFlush);
-                    return true;
                 }
             }
             finally
@@ -159,30 +156,23 @@ namespace EsentQueue
             var cursor = _cursorCache.GetCursor();
             try
             {
-
-                using (var tx = cursor.BeginTransaction())
+                lock (_instance)
                 {
-                    Api.MoveBeforeFirst(cursor.Session, cursor.DataTable);
-                    while (true)
+                    using (var tx = cursor.BeginTransaction())
                     {
-                        if (!Api.TryMoveNext(cursor.Session, cursor.DataTable))
+                        if (!Api.TryMoveFirst(cursor.Session, cursor.DataTable))
                         {
                             item = default(T);
                             return false;
                         }
 
-                        if (Api.TryGetLock(cursor.Session, cursor.DataTable, GetLockGrbit.Read))
+                        using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
                         {
-                            break;
+                            item = _serializer.Unpack(colStream);
                         }
-                    }
 
-                    using (var colStream = new ColumnStream(cursor.Session, cursor.DataTable, cursor.SerializedObjectColumn))
-                    {
-                        item = _serializer.Unpack(colStream);
+                        return true;
                     }
-
-                    return true;
                 }
             }
             finally

@@ -96,9 +96,11 @@ namespace QueueDemo
                         {
                             try
                             {
+                                var spinWait = new SpinWait();
                                 while (queue.TryPeek(out item))
                                 {
                                     Interlocked.Increment(ref peekCount);
+                                    spinWait.SpinOnce();
                                 }
                             }
                             catch (Exception)
