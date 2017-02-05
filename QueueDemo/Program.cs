@@ -15,7 +15,7 @@ namespace QueueDemo
 
         static void Main(string[] args)
         {
-            const int ItemCount = 50000;
+            const int ItemCount = 200000;
             SingleThreadTest(ItemCount);
             int workers = Environment.ProcessorCount;
             Console.WriteLine($"Using {workers} workers...");

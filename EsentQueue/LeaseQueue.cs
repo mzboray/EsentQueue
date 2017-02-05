@@ -16,12 +16,11 @@ namespace EsentQueue
     /// of persistentqueue
     /// </summary>
     /// <typeparam name="T"></typeparam>
-    internal class LeaseQueue<T> : IDisposable
+    public class LeaseQueue<T> : IDisposable
     {
         private const string TableName = "Data";
 
         private static readonly MessagePackSerializer<T> _serializer = MessagePackSerializer.Get<T>();
-
 
         private Instance _instance;
         private string _databaseName;
@@ -117,20 +116,6 @@ namespace EsentQueue
                             return false;
                         }
 
-                        while (true)
-                        {
-                            if (!Api.TryMoveNext(session, table))
-                            {
-                                item = default(T);
-                                return false;
-                            }
-
-                            if (Api.TryGetLock(session, table, GetLockGrbit.Read))
-                            {
-                                break;
-                            }
-                        }
-
                         var objectCol = Api.GetTableColumnid(session, table, "SerializedObject");
                         using (var colStream = new ColumnStream(session, table, objectCol))
                         {
@@ -157,25 +142,19 @@ namespace EsentQueue
                     using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
                     {
                         Api.JetSetCurrentIndex(session, table, "leasetimeout_index");
-                        Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey);
+                        Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey | MakeKeyGrbit.FullColumnStartLimit);
+
                         if (!Api.TrySeek(session, table, SeekGrbit.SeekGE))
                         {
                             lease = default(QueueItemLease<T>);
                             return false;
                         }
 
-                        while (true)
+                        Api.MakeKey(session, table, null, MakeKeyGrbit.NewKey | MakeKeyGrbit.FullColumnEndLimit);
+                        if (!Api.TrySetIndexRange(session, table, SetIndexRangeGrbit.RangeInclusive | SetIndexRangeGrbit.RangeUpperLimit))
                         {
-                            if (Api.TryGetLock(session, table, GetLockGrbit.Write))
-                            {
-                                break;
-                            }
-
-                            if (!Api.TryMoveNext(session, table))
-                            {
-                                lease = default(QueueItemLease<T>);
-                                return false;
-                            }
+                            lease = default(QueueItemLease<T>);
+                            return false;
                         }
 
                         T item;
@@ -187,7 +166,11 @@ namespace EsentQueue
                             item = _serializer.Unpack(colStream);
                         }
 
-                        Api.SetColumn(session, table, leaseCol, (DateTime.Now + TimeSpan.FromSeconds(5)).Ticks);
+                        using (var update = new Update(session, table, JET_prep.Replace))
+                        {
+                            Api.SetColumn(session, table, leaseCol, (DateTime.Now + TimeSpan.FromSeconds(5)).Ticks);
+                            update.Save();
+                        }
 
                         transaction.Commit(CommitTransactionGrbit.LazyFlush);
                         lease = new QueueItemLease<T>(this, item, bookmark);
@@ -211,6 +194,34 @@ namespace EsentQueue
                         if (Api.TryGotoBookmark(session, table, bookmark, bookmark.Length))
                         {
                             Api.JetDelete(session, table);
+                            transaction.Commit(CommitTransactionGrbit.LazyFlush);
+                        }
+                    }
+                }
+            }
+        }
+
+        internal void Rollback(byte[] bookmark)
+        {
+            using (var session = new Session(_instance))
+            {
+                JET_DBID dbId;
+                Api.OpenDatabase(session, _databaseName, out dbId, OpenDatabaseGrbit.None);
+
+                using (var transaction = new Transaction(session))
+                {
+                    using (var table = new Table(session, dbId, TableName, OpenTableGrbit.None))
+                    {
+                        if (Api.TryGotoBookmark(session, table, bookmark, bookmark.Length))
+                        {
+                            var leaseCol = Api.GetTableColumnid(session, table, "LeaseTimeout");
+
+                            using (var update = new Update(session, table, JET_prep.Replace))
+                            {
+                                Api.SetColumn(session, table, leaseCol, null);
+                                update.Save();
+                            }
+
                             transaction.Commit(CommitTransactionGrbit.LazyFlush);
                         }
                     }
@@ -292,6 +303,11 @@ namespace EsentQueue
         public void MarkCompleted()
         {
             _queue.RemoveAtBookmark(_bookmark);
+        }
+
+        public void Rollback()
+        {
+            _queue.Rollback(_bookmark);
         }
     }
 }

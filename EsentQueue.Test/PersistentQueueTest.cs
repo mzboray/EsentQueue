@@ -18,8 +18,8 @@ namespace EsentQueue.Test
         public void BeforeEachTest()
         {
             string path = Path.Combine(TestContext.CurrentContext.WorkDirectory, TestContext.CurrentContext.WorkerId, "test.edb");
-            Console.WriteLine(path);
-            Queue = new PersistentQueue<int>(path, StartOption.CreateNew); 
+            TestContext.WriteLine($"Path: {path}");
+            Queue = new PersistentQueue<int>(path, StartOption.CreateNew);
         }
 
         [TearDown]
